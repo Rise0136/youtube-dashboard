@@ -2,12 +2,11 @@ import streamlit as st
 from googleapiclient.discovery import build
 import pandas as pd
 import plotly.express as px
-from datetime import datetime, timedelta
 
 # 1. 페이지 설정
 st.set_page_config(page_title="YouTube 트렌드 분석기", layout="wide")
 
-# 2. 사이드바 - API 키 및 기간 설정
+# 2. 사이드바 - API 키 설정 (기간 설정 삭제됨)
 st.sidebar.title("⚙️ 설정")
 api_key = st.sidebar.text_input("YouTube Data API Key 입력", type="password")
 
@@ -19,26 +18,6 @@ if not api_key:
 youtube = build('youtube', 'v3', developerKey=api_key)
 
 st.sidebar.divider()
-
-# --- 기간 설정 로직 추가 ---
-st.sidebar.subheader("📅 조회 기간 설정")
-period_options = {
-    "최근 1일": 1,
-    "최근 1주일": 7,
-    "최근 1개월": 30,
-    "최근 3개월": 90,
-    "최근 6개월": 180,
-    "최근 1년": 365
-}
-selected_period = st.sidebar.selectbox("기간을 선택하세요", list(period_options.keys()))
-days_to_subtract = period_options[selected_period]
-
-# YouTube API 형식(RFC 3339)에 맞게 날짜 변환
-published_after = (datetime.utcnow() - timedelta(days=days_to_subtract)).isoformat() + "Z"
-# -----------------------------
-
-# 3. 메뉴 선택
-st.sidebar.divider()
 menu = st.sidebar.radio(
     "기능 선택",
     ["🔥 카테고리별 인기 동영상", "🔍 특정 채널 모니터링", "📈 키워드 검색 분석"]
@@ -46,8 +25,7 @@ menu = st.sidebar.radio(
 
 # ----------------- 기능 1: 카테고리별 인기 영상 -----------------
 if menu == "🔥 카테고리별 인기 동영상":
-    st.title("🔥 카테고리별 인기 동영상 트렌드")
-    st.info("💡 유튜브 정책상 '인기 급상승 영상'은 실시간 기준으로만 제공되어 기간 설정이 적용되지 않습니다.")
+    st.title("🔥 카테고리별 실시간 인기 동영상")
     
     categories = {
         "전체 인기": "0", "음악": "10", "게임": "20",
@@ -72,12 +50,17 @@ if menu == "🔥 카테고리별 인기 동영상":
         
         items = []
         for v in res.get('items', []):
+            views = int(v['statistics'].get('viewCount', 0))
+            likes = int(v['statistics'].get('likeCount', 0))
+            # 참여도(좋아요 비율) 계산
+            engagement_rate = (likes / views * 100) if views > 0 else 0
+            
             items.append({
                 '제목': v['snippet']['title'],
                 '채널명': v['snippet']['channelTitle'],
-                '조회수': int(v['statistics'].get('viewCount', 0)),
-                '좋아요': int(v['statistics'].get('likeCount', 0)),
-                '댓글수': int(v['statistics'].get('commentCount', 0)),
+                '조회수': views,
+                '좋아요': likes,
+                '참여도(%)': round(engagement_rate, 2),
                 '게시일': v['snippet']['publishedAt'][:10]
             })
         
@@ -87,12 +70,12 @@ if menu == "🔥 카테고리별 인기 동영상":
             col1, col2, col3 = st.columns(3)
             col1.metric("TOP 20 평균 조회수", f"{int(df['조회수'].mean()):,}회")
             col2.metric("TOP 20 평균 좋아요", f"{int(df['좋아요'].mean()):,}개")
-            col3.metric("최고 조회수 영상", f"{df['조회수'].max():,}회")
+            col3.metric("최고 참여도(좋아요 비율)", f"{df['참여도(%)'].max()}%")
             
             st.divider()
             fig = px.bar(df.head(10), x='조회수', y='제목', orientation='h', 
-                         color='좋아요', title="인기 동영상 TOP 10 (조회수 기준)",
-                         hover_data=['채널명', '댓글수'])
+                         color='참여도(%)', title="인기 동영상 TOP 10 (조회수 및 참여도)",
+                         hover_data=['채널명', '좋아요'])
             fig.update_layout(yaxis={'autorange': 'reversed'})
             st.plotly_chart(fig, use_container_width=True)
             st.dataframe(df, use_container_width=True)
@@ -103,7 +86,8 @@ elif menu == "🔍 특정 채널 모니터링":
     channel_query = st.text_input("채널 이름 또는 핸들(@)을 입력하세요", "@Google")
     
     if st.button("채널 분석 시작"):
-        with st.spinner(f"{selected_period} 동안의 채널 정보를 불러오는 중..."):
+        with st.spinner("채널 및 최근 영상 상세 데이터를 불러오는 중..."):
+            # 1. 채널 검색
             search_res = youtube.search().list(
                 part="snippet", q=channel_query, type="channel", maxResults=1
             ).execute()
@@ -111,6 +95,7 @@ elif menu == "🔍 특정 채널 모니터링":
             if search_res.get('items'):
                 channel_id = search_res['items'][0]['snippet']['channelId']
                 
+                # 2. 채널 기본 스탯
                 ch_res = youtube.channels().list(
                     part="snippet,statistics", id=channel_id
                 ).execute()['items'][0]
@@ -124,59 +109,79 @@ elif menu == "🔍 특정 채널 모니터링":
                 c2.metric("총 누적 조회수", f"{int(stats.get('viewCount', 0)):,}회")
                 c3.metric("총 영상 수", f"{int(stats.get('videoCount', 0)):,}개")
                 
-                # --- 기간 필터(publishedAfter) 적용 ---
-                videos_res = youtube.search().list(
-                    part="snippet",
-                    channelId=channel_id,
-                    order="date",
-                    publishedAfter=published_after, # 기간 필터 적용
-                    maxResults=15,
-                    type="video"
+                # 3. 최근 영상 검색 (영상 ID만 먼저 추출)
+                recent_search = youtube.search().list(
+                    part="id", channelId=channel_id, order="date",
+                    maxResults=10, type="video"
                 ).execute()
                 
-                v_list = []
-                for v in videos_res.get('items', []):
-                    v_list.append({
-                        '영상 제목': v['snippet']['title'],
-                        '업로드 날짜': v['snippet']['publishedAt'][:10],
-                    })
+                video_ids = [item['id']['videoId'] for item in recent_search.get('items', [])]
+                
+                # 4. 각 영상의 상세 지표(조회수, 좋아요 등) 수집
+                if video_ids:
+                    videos_res = youtube.videos().list(
+                        part="snippet,statistics", id=','.join(video_ids)
+                    ).execute()
                     
-                st.markdown(f"### 📌 {selected_period} 동안 업로드된 영상")
-                if v_list:
+                    v_list = []
+                    for v in videos_res.get('items', []):
+                        views = int(v['statistics'].get('viewCount', 0))
+                        likes = int(v['statistics'].get('likeCount', 0))
+                        rate = (likes / views * 100) if views > 0 else 0
+                        
+                        v_list.append({
+                            '영상 제목': v['snippet']['title'],
+                            '조회수': views,
+                            '좋아요': likes,
+                            '참여도(%)': round(rate, 2),
+                            '업로드 날짜': v['snippet']['publishedAt'][:10]
+                        })
+                        
+                    st.markdown("### 📌 최근 업로드 10개 영상 상세 분석")
                     st.dataframe(pd.DataFrame(v_list), use_container_width=True)
                 else:
-                    st.warning(f"선택하신 '{selected_period}' 동안 업로드된 영상이 없습니다.")
+                    st.warning("최근 업로드된 영상이 없습니다.")
             else:
                 st.error("채널을 찾을 수 없습니다.")
 
 # ----------------- 기능 3: 키워드 검색 분석 -----------------
 elif menu == "📈 키워드 검색 분석":
-    st.title("📈 키워드 기반 영상 트렌드 탐색")
+    st.title("📈 키워드 기반 영상 상세 분석")
     keyword = st.text_input("분석할 키워드를 입력하세요", "생성형 AI")
     
     if st.button("키워드 분석"):
-        with st.spinner(f"{selected_period} 동안의 검색 결과를 수집 중..."):
+        with st.spinner("검색 결과 상세 데이터를 수집 중..."):
             
-            # --- 기간 필터(publishedAfter) 적용 ---
+            # 1. 키워드로 영상 검색 (ID 추출)
             search_res = youtube.search().list(
-                part="snippet",
-                q=keyword,
-                type="video",
-                order="viewCount", # 조회수 높은 순으로 정렬
-                publishedAfter=published_after, # 기간 필터 적용
-                maxResults=15
+                part="id", q=keyword, type="video", order="relevance", maxResults=15
             ).execute()
             
-            results = []
-            for item in search_res.get('items', []):
-                results.append({
-                    '제목': item['snippet']['title'],
-                    '채널명': item['snippet']['channelTitle'],
-                    '게시일': item['snippet']['publishedAt'][:10]
-                })
+            video_ids = [item['id']['videoId'] for item in search_res.get('items', [])]
             
-            st.markdown(f"### 🔎 {selected_period} 동안 '{keyword}' 관련 조회수 높은 영상")
-            if results:
-                st.dataframe(pd.DataFrame(results), use_container_width=True)
+            # 2. 추출된 ID로 상세 지표 수집
+            if video_ids:
+                videos_res = youtube.videos().list(
+                    part="snippet,statistics", id=','.join(video_ids)
+                ).execute()
+                
+                results = []
+                for v in videos_res.get('items', []):
+                    views = int(v['statistics'].get('viewCount', 0))
+                    likes = int(v['statistics'].get('likeCount', 0))
+                    
+                    results.append({
+                        '제목': v['snippet']['title'],
+                        '채널명': v['snippet']['channelTitle'],
+                        '조회수': views,
+                        '좋아요': likes,
+                        '게시일': v['snippet']['publishedAt'][:10]
+                    })
+                
+                # 조회수 기준으로 정렬하여 표시
+                df_results = pd.DataFrame(results).sort_values(by="조회수", ascending=False)
+                
+                st.markdown(f"### 🔎 '{keyword}' 관련 상위 노출 영상 상세 지표")
+                st.dataframe(df_results.reset_index(drop=True), use_container_width=True)
             else:
-                st.warning(f"선택하신 '{selected_period}' 동안 검색된 영상이 없습니다.")
+                st.warning("검색된 영상이 없습니다.")
