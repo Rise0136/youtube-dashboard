@@ -29,17 +29,13 @@ menu = st.sidebar.radio(
     ["🔥 카테고리별 인기 동영상", "🔍 특정 채널 모니터링", "📈 키워드 검색 분석"]
 )
 
-# AI 키워드 리스트 (라벨 누락 영상 보완용)
+# AI 키워드 리스트
 AI_KEYWORDS = ['ai', '인공지능', '생성형', '챗gpt', 'chatgpt', '합성', 'cover', '딥페이크']
 
 def is_ai_content(video_item):
-    """유튜브 공식 라벨 또는 제목을 통해 AI 콘텐츠인지 판별"""
-    # 1. 공식 라벨 확인 (status.containsSyntheticMedia)
     has_ai_label = video_item.get('status', {}).get('containsSyntheticMedia', False)
-    # 2. 제목 키워드 보조 확인
     title = video_item['snippet']['title'].lower()
     has_ai_keyword = any(kw in title for kw in AI_KEYWORDS)
-    
     return has_ai_label or has_ai_keyword
 
 # ----------------- 기능 1: 카테고리별 인기 영상 -----------------
@@ -55,12 +51,12 @@ if menu == "🔥 카테고리별 인기 동영상":
     selected_cat = st.selectbox("카테고리 선택", list(categories.keys()))
     cat_id = categories[selected_cat]
     
-    with st.spinner("데이터 수집 중... (AI 필터 적용 시 최대 50개의 인기 영상을 분석합니다)"):
+    with st.spinner("데이터 수집 중..."):
         params = {
-            'part': 'snippet,statistics,status', # 영상의 상세 상태(status) 데이터도 함께 요청
+            'part': 'snippet,statistics,status',
             'chart': 'mostPopular',
             'regionCode': 'KR',
-            'maxResults': 50 # 필터링 후 넉넉한 갯수를 확보하기 위해 50개 호출
+            'maxResults': 50
         }
         if cat_id != "0":
             params['videoCategoryId'] = cat_id
@@ -69,19 +65,18 @@ if menu == "🔥 카테고리별 인기 동영상":
         
         items = []
         for v in res.get('items', []):
-            # AI 필터가 켜져있고, 해당 영상이 AI 영상이 아니면 리스트에 넣지 않고 건너뜀
             if ai_filter and not is_ai_content(v):
                 continue
                 
             views = int(v['statistics'].get('viewCount', 0))
             likes = int(v['statistics'].get('likeCount', 0))
             engagement_rate = (likes / views * 100) if views > 0 else 0
-            
             ai_status = "🤖 AI/합성" if is_ai_content(v) else "일반"
             
             items.append({
                 '분류': ai_status,
                 '제목': v['snippet']['title'],
+                '영상 링크': f"https://www.youtube.com/watch?v={v['id']}", # 링크 추가
                 '채널명': v['snippet']['channelTitle'],
                 '조회수': views,
                 '좋아요': likes,
@@ -99,17 +94,22 @@ if menu == "🔥 카테고리별 인기 동영상":
             
             st.divider()
             
-            # 차트에 보여줄 상위 10개 추출
             chart_df = df.sort_values(by='조회수', ascending=False).head(10)
-            
             fig = px.bar(chart_df, x='조회수', y='제목', orientation='h', 
-                         color='참여도(%)', title=f"'{selected_cat}' 카테고리 상위 영상 (조회수 기준)",
-                         hover_data=['채널명', '분류'])
+                         color='참여도(%)', title=f"'{selected_cat}' 카테고리 상위 영상 (조회수 기준)")
             fig.update_layout(yaxis={'autorange': 'reversed'})
             st.plotly_chart(fig, use_container_width=True)
-            st.dataframe(df, use_container_width=True)
+            
+            # 데이터프레임에 LinkColumn 적용
+            st.dataframe(
+                df,
+                column_config={
+                    "영상 링크": st.column_config.LinkColumn("바로가기", display_text="🔗 보러가기")
+                },
+                use_container_width=True
+            )
         else:
-            st.warning("선택하신 카테고리에 해당하는 (또는 AI 필터 조건에 맞는) 인기 영상이 현재 없습니다.")
+            st.warning("조건에 맞는 인기 영상이 현재 없습니다.")
 
 # ----------------- 기능 2: 채널 모니터링 -----------------
 elif menu == "🔍 특정 채널 모니터링":
@@ -117,7 +117,7 @@ elif menu == "🔍 특정 채널 모니터링":
     channel_query = st.text_input("채널 이름 또는 핸들(@)을 입력하세요", "@Google")
     
     if st.button("채널 분석 시작"):
-        with st.spinner("채널 및 영상 상세 데이터를 불러오는 중..."):
+        with st.spinner("채널 및 영상 데이터를 불러오는 중..."):
             search_res = youtube.search().list(
                 part="snippet", q=channel_query, type="channel", maxResults=1
             ).execute()
@@ -147,12 +147,11 @@ elif menu == "🔍 특정 채널 모니터링":
                 
                 if video_ids:
                     videos_res = youtube.videos().list(
-                        part="snippet,statistics,status", id=','.join(video_ids) # status 추가
+                        part="snippet,statistics,status", id=','.join(video_ids)
                     ).execute()
                     
                     v_list = []
                     for v in videos_res.get('items', []):
-                        # 필터 적용 로직
                         if ai_filter and not is_ai_content(v):
                             continue
                             
@@ -164,6 +163,7 @@ elif menu == "🔍 특정 채널 모니터링":
                         v_list.append({
                             '분류': ai_status,
                             '영상 제목': v['snippet']['title'],
+                            '영상 링크': f"https://www.youtube.com/watch?v={v['id']}", # 링크 추가
                             '조회수': views,
                             '좋아요': likes,
                             '참여도(%)': round(rate, 2),
@@ -172,9 +172,16 @@ elif menu == "🔍 특정 채널 모니터링":
                         
                     st.markdown("### 📌 최근 업로드 영상 상세 분석")
                     if v_list:
-                        st.dataframe(pd.DataFrame(v_list), use_container_width=True)
+                        # 데이터프레임에 LinkColumn 적용
+                        st.dataframe(
+                            pd.DataFrame(v_list),
+                            column_config={
+                                "영상 링크": st.column_config.LinkColumn("바로가기", display_text="🔗 보러가기")
+                            },
+                            use_container_width=True
+                        )
                     else:
-                        st.warning("AI 필터 조건에 맞는 최근 영상이 없습니다.")
+                        st.warning("조건에 맞는 최근 영상이 없습니다.")
                 else:
                     st.warning("최근 업로드된 영상이 없습니다.")
             else:
@@ -195,12 +202,11 @@ elif menu == "📈 키워드 검색 분석":
             
             if video_ids:
                 videos_res = youtube.videos().list(
-                    part="snippet,statistics,status", id=','.join(video_ids) # status 추가
+                    part="snippet,statistics,status", id=','.join(video_ids)
                 ).execute()
                 
                 results = []
                 for v in videos_res.get('items', []):
-                    # 필터 적용 로직
                     if ai_filter and not is_ai_content(v):
                         continue
                         
@@ -211,6 +217,7 @@ elif menu == "📈 키워드 검색 분석":
                     results.append({
                         '분류': ai_status,
                         '제목': v['snippet']['title'],
+                        '영상 링크': f"https://www.youtube.com/watch?v={v['id']}", # 링크 추가
                         '채널명': v['snippet']['channelTitle'],
                         '조회수': views,
                         '좋아요': likes,
@@ -220,8 +227,16 @@ elif menu == "📈 키워드 검색 분석":
                 if results:
                     df_results = pd.DataFrame(results).sort_values(by="조회수", ascending=False)
                     st.markdown(f"### 🔎 '{keyword}' 관련 노출 영상")
-                    st.dataframe(df_results.reset_index(drop=True), use_container_width=True)
+                    
+                    # 데이터프레임에 LinkColumn 적용
+                    st.dataframe(
+                        df_results.reset_index(drop=True),
+                        column_config={
+                            "영상 링크": st.column_config.LinkColumn("바로가기", display_text="🔗 보러가기")
+                        },
+                        use_container_width=True
+                    )
                 else:
-                    st.warning("AI 필터 조건에 맞는 검색 결과가 없습니다.")
+                    st.warning("조건에 맞는 검색 결과가 없습니다.")
             else:
                 st.warning("검색된 영상이 없습니다.")
