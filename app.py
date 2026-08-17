@@ -6,12 +6,15 @@ import plotly.express as px
 # 1. 페이지 설정
 st.set_page_config(page_title="YouTube 트렌드 분석기", layout="wide")
 
-# 2. 사이드바 - API 키 및 필터 설정
+# 2. 사이드바 - API 키 자동 연결 및 필터 설정
 st.sidebar.title("⚙️ 설정")
-api_key = st.sidebar.text_input("YouTube Data API Key 입력", type="password")
 
-if not api_key:
-    st.warning("👈 좌측 사이드바에 발급받으신 YouTube API 키를 입력해 주세요.")
+# --- API 키 자동 불러오기 로직 ---
+try:
+    api_key = st.secrets["YOUTUBE_API_KEY"]
+    st.sidebar.success("✅ API 키가 자동으로 연결되었습니다.")
+except KeyError:
+    st.sidebar.error("❌ Streamlit Cloud의 Secrets에 API 키가 설정되지 않았습니다.")
     st.stop()
 
 # YouTube API 클라이언트 연결
@@ -94,7 +97,6 @@ if menu == "🔥 카테고리별 인기 동영상":
         df = pd.DataFrame(items)
         
         if not df.empty:
-            # 📌 [복구됨] 상단 요약 수치 (Metrics)
             col1, col2, col3 = st.columns(3)
             col1.metric("조회된 영상 수", f"{len(df)}개")
             col2.metric("평균 조회수", f"{int(df['조회수'].mean()):,}회")
@@ -102,7 +104,6 @@ if menu == "🔥 카테고리별 인기 동영상":
             
             st.divider()
             
-            # 📌 [복구됨] 시각화 차트 (Plotly)
             chart_df = df.sort_values(by='조회수', ascending=False).head(10)
             fig = px.bar(chart_df, x='조회수', y='제목', orientation='h', 
                          color='참여도(%)', title=f"'{selected_cat}' 카테고리 상위 영상 (조회수 기준)",
@@ -110,7 +111,6 @@ if menu == "🔥 카테고리별 인기 동영상":
             fig.update_layout(yaxis={'autorange': 'reversed'})
             st.plotly_chart(fig, use_container_width=True)
             
-            # 링크 버튼이 적용된 데이터 표
             st.dataframe(
                 df,
                 column_config={
@@ -142,7 +142,6 @@ elif menu == "🔍 특정 채널 모니터링":
                 stats = ch_res['statistics']
                 snippet = ch_res['snippet']
                 
-                # 📌 [복구됨] 채널 핵심 요약 지표
                 st.subheader(f"📺 {snippet['title']}")
                 c1, c2, c3 = st.columns(3)
                 c1.metric("구독자 수", f"{int(stats.get('subscriberCount', 0)):,}명")
